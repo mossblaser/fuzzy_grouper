@@ -5,7 +5,8 @@ from difflib import SequenceMatcher
 SIMILARITY_DIGITS = 3
 
 def fuzzy_grouper(files, similarity_threshold=0.90,
-                  comparisons_per_group=1):
+                  comparison_slice=slice(0, 1),
+                  status_line=None):
     """Group together similar files.
     
     Input: {"filename": "file-contents", ...}
@@ -14,15 +15,20 @@ def fuzzy_grouper(files, similarity_threshold=0.90,
     
     * similarity_threshold: Minimum similarity between two files to be
       considered part of the same group.
-    * comparisons_per_group: Number of items in a group to compare a new file
-      with before also adding it to that group. Set to -1 to compare against
-      all entries in the group.
+    * comparison_slice: Slice of items in a group to compare a new file
+      with before also adding it to that group.
     """
     groups = []
     
-    for this_filename, this_content in files.items():
+    for i, (this_filename, this_content) in enumerate(files.items()):
+        if status_line:
+            status_line.update("Comparing file {} of {} against {} group{}...".format(
+                i,
+                len(files),
+                len(groups),
+                "s" if len(groups) != 1 else ""))
         for group in groups:
-            for other_filename in group[:comparisons_per_group]:
+            for other_filename in group[comparison_slice]:
                 other_content = files[other_filename]
                 sm = SequenceMatcher(None,
                                      this_content,
@@ -39,10 +45,20 @@ def fuzzy_grouper(files, similarity_threshold=0.90,
         else:
             # No group contains anything similar, start a new group
             groups.append([this_filename])
+            if status_line:
+                status_line.append(
+                    "Created new group for {}".format(this_filename))
         
         # Keep the largest group first since this one is most likely to match
         # future groups
         groups.sort(key=len, reverse=True)
+    
+    if status_line:
+        status_line.update("")
+        status_line.append(
+            "Found {} group{}.".format(
+                len(groups),
+                "s" if len(groups) != 1 else ""))
     
     return groups
 
@@ -64,6 +80,25 @@ def remove_bars(s):
 def filter_string(s):
     return remove_hex(remove_numbers(remove_bars(s)))
 
+class StatusLine(object):
+    
+    def __init__(self):
+        self._started = False
+        self._last_line = None
+    
+    def update(self, new_line):
+        if not self._started:
+            sys.stderr.write("\n")
+            self._started = True
+        sys.stderr.write("\033[1F\033[2K{}\n".format(new_line))
+        self._last_line = new_line
+    
+    def append(self, new_line):
+        old_status = self._last_line
+        self.update(new_line)
+        
+        sys.stderr.write("\n")
+        self.update(old_status)
 
 def main():
     import argparse
@@ -82,6 +117,12 @@ def main():
     parser.add_argument("--threshold", "-t", type=float, default=0.9,
                         help="Lower threshold for similarity scores of " 
                              "files to be grouped together.")
+    
+    parser.add_argument("--summary-only", "-s", action="store_true",
+                        help="Only show a single file from each group.")
+    
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Print a status line indicating progress.")
     
     parser.add_argument("--compare-whole-group", "-w", action="store_true",
                         help="If set, files are checked agaisnt every other " 
@@ -119,6 +160,11 @@ def main():
     
     filenames = args.file + args.normalise + args.score
     
+    if args.verbose:
+        status_line = StatusLine()
+    else:
+        status_line = None
+    
     filter_bank = []
     if not args.keep_numbers:
         filter_bank.append(remove_numbers)
@@ -127,6 +173,9 @@ def main():
     if not args.keep_ascii_bars:
         filter_bank.append(remove_bars)
     
+    if status_line:
+        status_line.update(
+            "Filtering {} files...".format(len(filenames)))
     files = {}
     for filename in filenames:
         with open(filename, "r") as f:
@@ -147,11 +196,25 @@ def main():
         print(sm.ratio())
         return 0
 
+    if args.compare_whole_group:
+        comparison_slice = slice(0, None)
+    else:
+        comparison_slice = slice(0, 1)
+
     # Construct the groups
     groups = fuzzy_grouper(files,
                            args.threshold,
-                           -1 if args.compare_whole_group else 1)
-    print("\n\n".join("\n".join(group) for group in groups))
+                           comparison_slice,
+                           status_line)
+    
+    if args.summary_only:
+        print("\n\n".join(
+            "{}\n(and {} other{})".format(group[0],
+                                          len(group)-1,
+                                          "s" if (len(group)-1) != 1 else "")
+            for group in groups))
+    else:
+        print("\n\n".join("\n".join(group) for group in groups))
     
     if args.print_similarity_matrix:
         print("")
