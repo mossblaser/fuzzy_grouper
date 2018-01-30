@@ -112,7 +112,8 @@ def main():
     )
     
     parser.add_argument("file", nargs="*",
-                        help="Files to compare.")
+                        help="Files to compare or '-' to read one per-line "
+                             "from stdin.")
     
     parser.add_argument("--threshold", "-t", type=float, default=0.9,
                         help="Lower threshold for similarity scores of " 
@@ -158,7 +159,10 @@ def main():
     if bool(args.score) + bool(args.normalise) + bool(args.file) > 1:
         parser.error("file, --score, --normalise are mutually exclusive.")
     
-    filenames = args.file + args.normalise + args.score
+    if args.file == ["-"]:
+        filenames = sys.stdin.read().strip().split("\n")
+    else:
+        filenames = args.file + args.normalise + args.score
     
     if args.verbose:
         status_line = StatusLine()
